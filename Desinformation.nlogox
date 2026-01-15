@@ -1,0 +1,1873 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.3" snapToGrid="false">
+  <code><![CDATA[extensions [ csv string ]
+
+globals [
+  db_a
+  db_b
+  
+  db_c_traits
+  db_c_demo
+  db_c_tech
+  db_c_disin 
+  
+  s_max
+  setup-once
+  
+  broadcaster-agents
+]
+
+turtles-own [
+  ;; db_c
+  traits ; used - 0,1,5,6,9
+  tech
+  disin
+  demo
+  
+  ;; abstract
+  personality
+  
+  ;; for switching modes of display
+  tempcolor
+  
+  physical-x
+  physical-y
+  physical
+  
+  neighbours
+  
+  ;; disinformation equipped by the agent
+  narrative
+  
+  soc-capital ;-1 to 1
+]
+
+to setup
+  clear-all
+  reset-ticks
+  if enable-rng-seed = true [ 
+    random-seed rng-seed
+  ]
+    
+  set s_max 100 * dimension-count  ;; 6 dimensional hypervolume max distance between's which 10, 600 units internally
+  
+  setup-data
+  setup-field
+  setup-agents
+  agentlogic
+  ask turtles [colorupd]
+end
+
+;; .csv and .json database data  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report create-techniques-vector [lst]
+  let tech_list [0 0 0 0 0 0 0 0 0 0 0]
+  
+  foreach lst [
+    x ->
+    if x = "whataboutism"                   [ set tech_list replace-item 0 tech_list ((item 0 tech_list) + 1) ]
+    if x = "whataboutismRedHerringStrawMan" [ set tech_list replace-item 1 tech_list ((item 1 tech_list) + 1) ]
+    if x = "emotionalExpression"            [ set tech_list replace-item 2 tech_list ((item 2 tech_list) + 1) ]
+    if x = "emotionalExpression"            [ set tech_list replace-item 3 tech_list ((item 3 tech_list) + 1) ]
+    if x = "repetition"                     [ set tech_list replace-item 4 tech_list ((item 4 tech_list) + 1) ]
+    if x = "reductioAdHitlerum"             [ set tech_list replace-item 5 tech_list ((item 5 tech_list) + 1) ]
+    if x = "doubt"                          [ set tech_list replace-item 6 tech_list ((item 6 tech_list) + 1) ]
+    if x = "uncertainty"                    [ set tech_list replace-item 6 tech_list ((item 6 tech_list) + 1) ] ;; Not a mistake
+    if x = "followingBehind"                [ set tech_list replace-item 7 tech_list ((item 7 tech_list) + 1) ]
+    if x = "wavingTheFlag"                  [ set tech_list replace-item 8 tech_list ((item 8 tech_list) + 1) ]
+    if x = "appealToAuthority"              [ set tech_list replace-item 9 tech_list ((item 9 tech_list) + 1) ]
+    if x = "simplification"                 [set tech_list replace-item 10 tech_list ((item 10 tech_list) + 1)]
+  ]
+  
+  report tech_list
+end
+
+to-report create-disinformation-vector [lst]
+  ;; distrustOfWesternInstitutions, migrantCrisis, warInUkraine, endOfWesternCivilization, promotionOfEffectiveGovernance, lithuanianDefamation, distrustOfLithuanianInstitutions, newWorldOrder, lithuanianArmedForcesDefamation
+  let desin_list [0 0 0 0 0 0 0 0 0 0]
+  
+  foreach lst [
+    x ->
+    if x = "distrustOfWesternInstitutions"    [ set desin_list replace-item 0 desin_list ((item 0 desin_list) + 1) ]
+    if x = "migrantCrisis"                    [ set desin_list replace-item 1 desin_list ((item 1 desin_list) + 1) ]
+    if x = "warInUkraine"                     [ set desin_list replace-item 2 desin_list ((item 2 desin_list) + 1) ]
+    if x = "endOfWesternCivilization"         [ set desin_list replace-item 3 desin_list ((item 3 desin_list) + 1) ]
+    if x = "promotionOfEffectiveGovernance"   [ set desin_list replace-item 4 desin_list ((item 4 desin_list) + 1) ]
+    if x = "lithuanianDefamation"             [ set desin_list replace-item 5 desin_list ((item 5 desin_list) + 1) ]
+    if x = "distrustOfLithuanianInstitutions" [ set desin_list replace-item 6 desin_list ((item 6 desin_list) + 1) ]
+    if x = "newWorldOrder"                    [ set desin_list replace-item 7 desin_list ((item 7 desin_list) + 1) ]
+    if x = "lithuanianArmedForcesDefamation"  [ set desin_list replace-item 8 desin_list ((item 8 desin_list) + 1) ]
+    if x = "endOfWashington"                  [ set desin_list replace-item 9 desin_list ((item 9 desin_list) + 1) ]
+  ]
+  
+  report desin_list
+end
+
+to-report sanitize [char]
+  if char = "" [ report 0 ]
+  report char
+end
+
+to-report sanitize-list [lst]
+  let i 0
+  foreach lst [
+    x -> 
+    set lst replace-item i lst (map sanitize x)
+    set i (i + 1)
+  ]
+  report lst
+end
+
+to-report topic-sensitivity-vector [lst]
+  ;; [[] [] [] [] []] x20 -> [[] [] [] [] []] x10
+  
+  let construct []
+  repeat 405 [
+    set construct fput 0 construct
+  ]
+  
+  let sens_list []
+  repeat 10 [
+    set sens_list fput construct sens_list
+  ]
+  
+  let i 0
+  foreach lst [
+    x -> 
+    set lst replace-item i lst (map [y -> y - 1] x)
+    set i (i + 1)
+  ] ;; All "1 - strongly disagree" prompts from the database get converted to zeroes for complete topic immunity
+  
+  ;show (list 
+  ;  (item 0 (item 0 lst)) (item 1 (item 0 lst)) (item 2 (item 0 lst)) (item 3 (item 0 lst)) (item 4 (item 0 lst))
+  ;  (item 5 (item 0 lst)) (item 6 (item 0 lst)) (item 7 (item 0 lst)) (item 8 (item 0 lst)) (item 9 (item 0 lst))
+  ;)
+  
+  set i 0
+  
+  foreach lst [
+    x ->
+    if i = 0 [ ;; distrustOfWesternInstitutions, migrantCrisis
+      set sens_list replace-item 0 sens_list (map + (item 0 sens_list) (item i lst))
+      set sens_list replace-item 1 sens_list (map + (item 1 sens_list) (item i lst))
+    ]
+    if i = 1 [ ;; distrustOfWesternInstitutions. warInUkraine
+      set sens_list replace-item 0 sens_list (map + (item 0 sens_list) (item i lst))
+      set sens_list replace-item 2 sens_list (map + (item 2 sens_list) (item i lst))
+    ]
+    if i = 2 [ ;; endOfWesternCivilization, promotionOfEffectiveGovernance, lithuanianDefamation
+      set sens_list replace-item 3 sens_list (map + (item 3 sens_list) (item i lst))
+      set sens_list replace-item 4 sens_list (map + (item 4 sens_list) (item i lst))
+      set sens_list replace-item 5 sens_list (map + (item 5 sens_list) (item i lst))
+    ]
+    if i = 3 [ ;; distrustOfWesternInstitutions, lithuanianArmedForcesDefamation
+      set sens_list replace-item 0 sens_list (map + (item 0 sens_list) (item i lst))
+      set sens_list replace-item 8 sens_list (map + (item 8 sens_list) (item i lst))
+    ]
+    if i = 4 [ ;; distrustOfLithuanianInstitutions
+      set sens_list replace-item 6 sens_list (map + (item 6 sens_list) (item i lst))
+    ]
+    
+    if i = 5 [ ;; distrustOfWesternInstitutions
+      set sens_list replace-item 0 sens_list (map + (item 0 sens_list) (item i lst))
+    ]
+    if i = 6 [ ;; endOfWesternCivilization, newWorldOrder, migrantCrisis
+      set sens_list replace-item 3 sens_list (map + (item 3 sens_list) (item i lst))
+      set sens_list replace-item 7 sens_list (map + (item 7 sens_list) (item i lst))
+      set sens_list replace-item 1 sens_list (map + (item 1 sens_list) (item i lst))
+    ]
+    if i = 7 [ ;; endOfWesternCivilization, promotionOfEffectiveGovernance
+      set sens_list replace-item 3 sens_list (map + (item 3 sens_list) (item i lst))
+      set sens_list replace-item 4 sens_list (map + (item 4 sens_list) (item i lst))
+    ]
+    if i = 8 [ ;; distrustOfWesternInstitutions, endOfWesternCivilization
+      set sens_list replace-item 0 sens_list (map + (item 0 sens_list) (item i lst))
+      set sens_list replace-item 3 sens_list (map + (item 3 sens_list) (item i lst))
+    ]
+    if i = 9 [ ;; promotionOfEffectiveGovernance
+      set sens_list replace-item 4 sens_list (map + (item 4 sens_list) (item i lst))
+    ]
+    
+    if i = 10 [ ;; distrustOfWesternInstitutions
+      set sens_list replace-item 0 sens_list (map + (item 0 sens_list) (item i lst))
+    ]
+    if i = 11 [ ;; distrustOfWesternInstitutions, warInUkraine, endOfWashington
+      set sens_list replace-item 0 sens_list (map + (item 0 sens_list) (item i lst))
+      set sens_list replace-item 2 sens_list (map + (item 2 sens_list) (item i lst))
+      set sens_list replace-item 9 sens_list (map + (item 9 sens_list) (item i lst))
+    ]
+    if i = 12 [ ;; endOfWesternCivilization, newWorldOrder. lithuanianDefamation
+      set sens_list replace-item 3 sens_list (map + (item 3 sens_list) (item i lst))
+      set sens_list replace-item 7 sens_list (map + (item 7 sens_list) (item i lst))
+      set sens_list replace-item 5 sens_list (map + (item 5 sens_list) (item i lst))
+    ]
+    if i = 13 [ ;; endOfWesternCivilization, newWorldOrder, lithuanianDefamation
+      set sens_list replace-item 3 sens_list (map + (item 3 sens_list) (item i lst))
+      set sens_list replace-item 7 sens_list (map + (item 7 sens_list) (item i lst))
+      set sens_list replace-item 5 sens_list (map + (item 5 sens_list) (item i lst))
+    ]
+    if i = 14 [ ;; endOfWesternCivilization, distrustOfWesternInstitutions, distrustOfLithuanianInstitutions
+      set sens_list replace-item 3 sens_list (map + (item 3 sens_list) (item i lst))
+      set sens_list replace-item 0 sens_list (map + (item 0 sens_list) (item i lst))
+      set sens_list replace-item 6 sens_list (map + (item 6 sens_list) (item i lst))
+    ]
+    
+    if i = 15 [ ;; promotionOfEffectiveGovernance
+      set sens_list replace-item 4 sens_list (map + (item 4 sens_list) (item i lst))
+    ]
+    if i = 16 [ ;; lithuanianArmedForcesDefamation
+      set sens_list replace-item 8 sens_list (map + (item 8 sens_list) (item i lst))
+    ]
+    if i = 17 [ ;; distrustOfLithuanianInstitutions, lithuanianDefamation
+      set sens_list replace-item 6 sens_list (map + (item 6 sens_list) (item i lst))
+      set sens_list replace-item 5 sens_list (map + (item 5 sens_list) (item i lst))
+    ]
+    if i = 18 [ ;; distrustOfLithuanianInstitutions, lithuanianArmedForcesDefamation
+      set sens_list replace-item 6 sens_list (map + (item 6 sens_list) (item i lst))
+      set sens_list replace-item 8 sens_list (map + (item 8 sens_list) (item i lst))
+    ]
+    if i = 19 [ ;; endOfWesternCivilization, newWorldOrder, migrantCrisis
+      set sens_list replace-item 3 sens_list (map + (item 3 sens_list) (item i lst))
+      set sens_list replace-item 7 sens_list (map + (item 7 sens_list) (item i lst))
+      set sens_list replace-item 1 sens_list (map + (item 1 sens_list) (item i lst))
+    ]
+    set i (i + 1)
+  ]
+  
+  ;; Normalise sensitivities to a scale of 0 (doesn't care/immune) to 5 (radical)
+  set i 0
+  foreach sens_list [
+    x -> 
+    if i = 0 [ set sens_list replace-item i sens_list (map [y -> y / 32 * 5] (item i sens_list)) ]
+    if i = 1 [ set sens_list replace-item i sens_list (map [y -> y / 12 * 5] (item i sens_list)) ]
+    if i = 2 [ set sens_list replace-item i sens_list (map [y -> y / 8 * 5] (item i sens_list))  ]
+    if i = 3 [ set sens_list replace-item i sens_list (map [y -> y / 32 * 5] (item i sens_list)) ]
+    if i = 4 [ set sens_list replace-item i sens_list (map [y -> y / 16 * 5] (item i sens_list)) ]
+    
+    if i = 5 [ set sens_list replace-item i sens_list (map [y -> y / 16 * 5] (item i sens_list)) ]
+    if i = 6 [ set sens_list replace-item i sens_list (map [y -> y / 16 * 5] (item i sens_list)) ]
+    if i = 7 [ set sens_list replace-item i sens_list (map [y -> y / 16 * 5] (item i sens_list)) ]
+    if i = 8 [ set sens_list replace-item i sens_list (map [y -> y / 12 * 5] (item i sens_list)) ]
+    if i = 9 [ set sens_list replace-item i sens_list (map [y -> y / 4 * 5] (item i sens_list))  ]
+    
+    set i (i + 1)
+  ]
+
+  report sens_list
+end
+
+to-report extract-data [ col db splitbool ]
+  if splitbool = true [
+    report map [row ->
+      string:rex-split (word (item col row)) " "
+    ] db
+  ]
+  if splitbool = false [
+    report map [row ->
+      (item col row)
+    ] db
+  ]
+end
+
+to-report randomize [ db ]
+  let temp map [ i -> map [row -> item i row] db ] (range length first db)
+  set temp shuffle temp
+  report map [ i -> map [row -> item i row] temp ] (range length first temp)
+end
+
+to-report check-db_a [ pos_a ]
+  let idx 0
+  let cap 0
+  let clst []
+  
+  foreach (item 0 db_a) [
+    x ->
+    if x = pos_a [
+      set clst fput idx clst
+      if cap = 2 [ ;; Data is tidily sorted so that each id in a cluster of 3, exits early after the 3rd id
+        report clst
+      ]
+      set cap (cap + 1)
+    ]
+    set idx (idx + 1)
+  ]
+  
+  report clst
+end
+
+to-report time-appropriation [ traits1_c ]
+  let lst []
+  foreach traits1_c [
+    x ->
+    if x = 1 [ set lst lput 0 lst ]
+    if x = 2 [ set lst lput 5 lst ]
+    if x = 3 [ set lst lput 15 lst ]
+    if x = 4 [ set lst lput 30 lst ]
+    if x = 5 [ set lst lput 60 lst ]
+    if x = 6 [ set lst lput 120 lst ]
+    if x = 7 [ set lst lput 240 lst ]
+  ]
+  report lst
+end
+
+to setup-data
+  ;;;; Dataset for
+  ;;;; Social impact
+  set db_a but-first csv:from-file "DB_A.csv"
+  
+  let id_a map [row -> item 8 row] db_a
+  ;; Social influence indicators
+  let spp1 map [row -> item 13 row] db_a ;; Social polarity
+  let spp2 map [row -> item 6 row] db_a  ;; Destructive criticism
+  let spp3 map [row -> item 14 row] db_a ;; Social radicalization
+  let spp4 map [row -> item 9 row] db_a  ;; Information bubbles
+  let spp5 map [row -> item 5 row] db_a  ;; Democratic
+  
+  ;; Social capital norms
+  let skn1 map [row -> item 15 row] db_a ;; Trust and cooperation
+  let skn2 map [row -> item 2 row] db_a  ;; Civic activism
+  let skn3 map [row -> item 12 row] db_a ;; Social network support
+  let skn4 map [row -> item 11 row] db_a ;; Personal connections
+  
+  ;; How can db_a and db_b be used in tandem?
+  ;;     One idea is to have db_a + db_b to create a unique article;
+  
+  set db_a (list id_a spp1 spp2 spp3 spp4 spp5 skn1 skn2 skn3 skn4)
+  
+  ;;;; Dataset for
+  ;;;; Collection of propaganda texts
+  set db_b but-first csv:from-file "DB_B.csv"
+  let ab_linker but-first csv:from-file "DB_B_DB_A_relation.csv"
+  
+  let disinformation map create-disinformation-vector (extract-data 5 db_b true)
+  let techniques map create-techniques-vector (extract-data 8 db_b true)
+  let linked_db_a []
+  
+  let headers (extract-data 7 db_b false)
+  let headers_linker map [row -> item 0 row] ab_linker
+  let id_linker map [row -> item 1 row] ab_linker
+  
+;   show headers
+;   show (item 0 headers)
+;   show position (item 0 headers) headers_linker
+;   show item (position (item 0 headers) headers_linker) id_linker
+  
+  foreach headers [
+    y ->
+    ;; Linking the datasets so all db_b fields correlate to db_a
+    let pos_a (item (position y headers_linker) id_linker)
+    
+    ;; Return indices of every matching id of a heading (each expert's review of a narrative)
+    let clst check-db_a pos_a
+    
+    ;; Average each expert's result
+    let data_ab [0 0 0 0 0 0 0 0 0]
+    foreach clst [
+      x ->
+      set data_ab (map + (data_ab) (list (item x (item 1 db_a)) (item x (item 2 db_a)) (item x (item 3 db_a)) (item x (item 4 db_a)) (item x (item 5 db_a)) (item x (item 6 db_a)) (item x (item 7 db_a)) (item x (item 8 db_a)) (item x (item 9 db_a))))
+    ]
+    set data_ab (map [x -> x / 3] data_ab)
+    set linked_db_a lput data_ab linked_db_a
+  ]
+
+  set db_b randomize (list disinformation techniques linked_db_a)
+  
+  ;;;; Dataset for
+  ;;;; Agent empirical data (survey data)
+  let db_c but-first csv:from-file "DB_C.csv"
+  
+  ;; Q1 group
+  let id_c map [row -> item 0 row] db_c
+  let trait1_c time-appropriation (map [row -> item 2 row] db_c)  ;; Time spent (affection quantity)
+  
+  let trait2_c map [row -> item 25 row] db_c ;; Sourcechecking (affection rate)
+                                             ;; chance to be affected
+  
+  let trait3_c map [row -> item 26 row] db_c ;; Importance of social media (affection ratio)
+  
+  let trait4_c map [row -> item 27 row] db_c ;; How many followers one has
+  
+  let trait5_c map [row -> item 28 row] db_c ;; Following (how much agent gets info)
+                                             ;; chance to catch propaganda
+  
+  let trait6_c map [row -> item 29 row - 1] db_c ;; Posting (how much info agent creates)
+                                             ;; used for broadcasting gene
+  
+  let trait7_c map [row -> item 30 row - 1] db_c ;; Forwarding (how much info agent shares)
+                                             ;; likelyhood to share
+  
+  let trait8_c map [row -> item 31 row] db_c ;; Commenting (how much attention does agent give to posts)
+  
+  let trait9_c map [row -> item 39 row] db_c ;; Trust in friends
+  
+  let trait10_c map [row -> item 43 row] db_c ;; One's tendency to change behaviour based on what's seen in socmedia
+  
+  let trait11_c map [row -> item 45 row] db_c ;; Radicalisation of one's views over last five years
+  
+  ;; Q2.1 group (identifying the techniques)
+  let tech1_c map [row -> item 52 row] db_c ;; whataboutism
+  let tech2_c map [row -> item 53 row] db_c ;; whataboutismRedHerringStrawMan (redHerring)
+  let tech3_c map [row -> item 54 row] db_c ;; emotionalExpression 
+  let tech4_c map [row -> item 55 row] db_c ;; emotionalExpression (adhominem)
+  let tech5_c map [row -> item 56 row] db_c ;; repetition
+  let tech6_c map [row -> item 57 row] db_c ;; reductioAdHitlerum
+  let tech7_c map [row -> item 58 row] db_c ;; doubt, uncertainty
+  let tech8_c map [row -> item 59 row] db_c ;; followingBehind (bandwagoning)
+  let tech9_c map [row -> item 60 row] db_c ;; wavingTheFlag
+  let tech10_c map [row -> item 61 row] db_c;; appealToAuthority
+  let tech11_c map [row -> item 62 row] db_c;; simplification
+  
+  ;; Q2.2 group (types of disinformation)
+  let disin1_c map [row -> item 63 row] db_c  ;; EU struggles with migrants
+                                             ;; distrustOfWesternInstitutions, migrantCrisis
+  
+  let disin2_c map [row -> item 64 row] db_c  ;; NATO expansion caused Russia-Ukraine war
+                                             ;; distrustOfWesternInstitutions. warInUkraine
+  
+  let disin3_c map [row -> item 65 row] db_c  ;; Baltic nations separating from USSR only caused bad
+                                             ;; endOfWesternCivilization, promotionOfEffectiveGovernance, lithuanianDefamation
+  
+  let disin4_c map [row -> item 66 row] db_c  ;; Taxpayer money is wasted serving NATO, not Baltic interests
+                                             ;; distrustOfWesternInstitutions, lithuanianArmedForcesDefamation
+  
+  let disin5_c map [row -> item 67 row] db_c  ;; Baltic institutions put foreign matters over their own people's
+                                             ;; distrustOfLithuanianInstitutions
+  
+  let disin6_c map [row -> item 68 row] db_c  ;; Better to break off from EU from regulations
+                                             ;; distrustOfWesternInstitutions
+  
+  let disin7_c map [row -> item 69 row] db_c  ;; Moral decay from political correctness
+                                             ;; endOfWesternCivilization, newWorldOrder, migrantCrisis
+  
+  let disin8_c map [row -> item 70 row] db_c  ;; China's firm government is better
+                                             ;; endOfWesternCivilization, promotionOfEffectiveGovernance
+  
+  let disin9_c map [row -> item 71 row] db_c  ;; Baltics should ally with China
+                                             ;; distrustOfWesternInstitutions, endOfWesternCivilization
+  
+  let disin10_c map [row -> item 72 row] db_c ;; Baltic governments censor their citizen's online discourse
+                                             ;; promotionOfEffectiveGovernance
+  
+  let disin11_c map [row -> item 73 row] db_c ;; Climate change is a distraction
+                                             ;; distrustOfWesternInstitutions
+  
+  let disin12_c map [row -> item 74 row] db_c ;; US would not help EU if attacked by Russia
+                                             ;; distrustOfWesternInstitutions, warInUkraine, endOfWashington
+  
+  let disin13_c map [row -> item 75 row] db_c ;; Russian economy is better from regulations
+                                             ;; endOfWesternCivilization, newWorldOrder. lithuanianDefamation
+  
+  let disin14_c map [row -> item 76 row] db_c ;; Russian culture is better protected
+                                             ;; endOfWesternCivilization, newWorldOrder, lithuanianDefamation
+  
+  let disin15_c map [row -> item 77 row] db_c ;; Self-governance is reduced from international - UN - regulations
+                                             ;; endOfWesternCivilization, distrustOfWesternInstitutions, distrustOfLithuanianInstitutions
+  
+  let disin16_c map [row -> item 78 row] db_c ;; Baltic voting system is flawed
+                                             ;; promotionOfEffectiveGovernance
+  
+  let disin17_c map [row -> item 79 row] db_c ;; Baltic armed forces waste taxpayer money
+                                             ;; lithuanianArmedForcesDefamation
+  
+  let disin18_c map [row -> item 80 row] db_c ;; Baltic independence ruined their economies
+                                             ;; distrustOfLithuanianInstitutions, lithuanianDefamation
+  
+  let disin19_c map [row -> item 81 row] db_c ;; Support for Ukraine is misused
+                                             ;; distrustOfLithuanianInstitutions, lithuanianArmedForcesDefamation
+  
+  let disin20_c map [row -> item 82 row] db_c ;; EU soft border policies caused refugee influx
+                                             ;; endOfWesternCivilization, newWorldOrder, migrantCrisis
+  
+  ;; Q3 group
+  let dem1_c map [row -> item 83 row] db_c ;; Age group
+                                           ;; 1 (18-25), 2 (26-35), 3 (36-45), 4 (46-55), 5 (56-65), 6 (65+)
+  
+  let dem2_c map [row -> item 84 row] db_c ;; Gender
+                                           ;; 1 (male), 2 (female), 3 (unknown)
+  
+  let dem3_c map [row -> item 85 row] db_c ;; Education
+                                           ;; 1 (primary), 2 (secondary), 3 (higher non-uni), 4 (university)
+  
+  let dem4_c map [row -> item 86 row] db_c ;; Mother tongue
+                                           ;; 1 (Lithuanian), 2 (Latvian), 4 (Russian), 6 (Polish), 7 (Other)
+  
+  let dem5_c map [row -> item 87 row] db_c ;; Occupational status
+                                           ;; 1~5 (worker), 6 (unemployed), 7 (retired), 8 (pupil)
+  
+  let dem6_c map [row -> item 88 row] db_c ;; Income
+                                           ;; 1 (<500 eur), 2 (<1,000), 3 (<1,500), 4 (<2,000), 5 (<3,000), 6 (<4,000), 7 (4,000+)
+  
+  let dem7_c map [row -> item 89 row] db_c ;; Marital status
+                                           ;; 1 (single/unmarried), 2 (married/unregistered), 3 (other)
+  
+  let dem8_c map [row -> item 90 row] db_c ;; Location
+                                           ;; 1 (major cities), 2 (other cities/regional centers), 3 (rural)
+  
+  let temp randomize (
+    list id_c trait1_c trait2_c trait3_c trait4_c trait5_c trait6_c trait7_c trait8_c trait9_c trait10_c trait11_c dem1_c dem2_c dem3_c dem4_c dem5_c dem6_c dem7_c dem8_c disin1_c disin2_c disin3_c disin4_c disin5_c disin6_c disin7_c disin8_c disin9_c disin10_c disin11_c disin12_c disin13_c disin14_c disin15_c disin16_c disin17_c disin18_c disin19_c disin20_c tech1_c tech2_c tech3_c tech4_c tech5_c tech6_c tech7_c tech8_c tech9_c tech10_c tech11_c
+  ) ;; so the traits get uniformly randomised, not mangling each respondent's data
+  
+  ;; dem1_c starts at 12th ~ 19th index
+  ;; tech1_c starts at 20th ~ 39th index
+  ;; desin1_c starts at 40th ~ 50th index
+  set db_c_traits sublist temp 1 12 ;; last index excluded from sublist
+  set db_c_demo   sublist temp 12 20
+  set db_c_disin  topic-sensitivity-vector (sublist temp 20 40)
+  set db_c_tech   sanitize-list (sublist temp 40 51)
+
+end
+
+;; Agents ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report find-index [lst num]
+  if item num lst > 0 [ report num ]
+  report find-index lst (num + 1)
+end
+
+to-report mod-list [lst idx]
+  let num (item idx lst - 1)
+  report replace-item idx lst num
+end
+
+to agent-creation
+  set shape "circle"
+  set size 3
+  
+  set soc-capital [0 0 0 0]
+  set personality []
+  
+  let i who
+  set traits map [col -> item i col] db_c_traits
+  set demo map [col -> item i col] db_c_demo
+  set tech map [col -> item i col] db_c_tech
+  set disin map [col -> item i col] db_c_disin
+  set narrative -1
+  
+  repeat dimension-count [
+    set personality fput (random-float 10 - 5) personality
+  ]
+end
+
+to-report find-index-val [lst val much]
+  let nlst []
+  let idx 0
+  
+  foreach lst [
+    x -> if x = val [
+      set much (much - 1)
+      set nlst fput idx nlst
+      if much = 0 [
+        report nlst
+      ]
+    ]
+    set idx (idx + 1)
+  ]
+  
+  report nlst
+end
+
+to setup-agents
+  if centralise-locations = true [ 
+    let i 0
+    repeat seedcount [
+      create-turtles 1 [
+        agent-creation
+        
+        set physical-x (random-float (physical-world-scale - 20)) + 10
+        set physical-y (random-float (physical-world-scale - 20)) + 10
+        set physical (list physical-x physical-y)
+        
+        set color 50 - i * 9
+        set tempcolor 50 - i * 9
+      ]
+      set i (i + 1)
+    ]
+    
+    ;; Create a random distribution of central agent towns
+    let ranlist []
+    repeat seedcount [
+      set ranlist fput 0 ranlist
+    ]
+    repeat (agentcount - seedcount) [
+      let rng (random seedcount)
+      let num (item rng ranlist + 1)
+      set ranlist replace-item rng ranlist num
+    ]
+    
+    repeat (agentcount - seedcount) [
+      create-turtles 1 [
+        agent-creation
+        
+        let rng random-float 1
+        let idx (find-index ranlist 0)
+        set ranlist (mod-list ranlist idx)
+        set color 50 - idx * 9
+        set tempcolor 50 - idx * 9
+        
+        set rng (random-float 5)
+        let angle (random-float 360)
+        let close-x [physical-x] of (turtle idx)
+        let close-y [physical-y] of (turtle idx)
+        set physical-x (close-x + (rng * cos angle))
+        set physical-y (close-y + (rng * sin angle))
+        set physical (list physical-x physical-y)
+      ]
+    ]
+  ]
+  
+  if centralise-locations = false [
+    repeat agentcount [
+      create-turtles 1 [
+        agent-creation
+        
+        set physical-x (random-float physical-world-scale)
+        set physical-y (random-float physical-world-scale)
+        set physical (list physical-x physical-y)
+        
+        set color 55
+        set tempcolor 55
+      ]
+    ]
+  ]
+
+  if anyone-broadcasts = false [
+    set broadcaster-agents (find-index-val (item 4 db_c_traits) 5 broadcasters)
+  ]
+  
+  if anyone-broadcasts = true [
+    let templist []
+    let i 0
+    repeat agentcount [
+      set templist lput i templist
+      set i (i + 1)
+    ]
+    set broadcaster-agents templist
+  ]
+    
+  ask turtles [
+    let other-turtles other turtles
+    let closest-physical-turtles min-n-of interaction-amount other turtles [
+      physical-distance self myself
+    ]
+    set neighbours closest-physical-turtles
+  ]
+end
+
+;; Network ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to setup-field
+  ask patches [
+    set pcolor white
+  ]
+end
+
+to-report physical-distance [ self-agent other-agent ]
+  let dist 0
+  let self-physical [physical] of self-agent
+  let other-physical [physical] of other-agent
+  
+  report sum (map [ [a b] -> (a - b) * (a - b) ] self-physical other-physical)
+end
+
+to-report virtual-distance-local [ self-virtual other-virtual ]
+  report sum (map [ [a b] -> (a - b) * (a - b) ] self-virtual other-virtual)
+end
+
+to-report collect-max [ vc ]
+  let vals map [ x -> item 1 x ] vc
+  let m max vals
+  report (list m position m vals)
+end
+
+to-report personality-distance [ self-agent other-agent virtual-candidates ]
+  let dist 0
+  let i 0
+  let self-virtual [personality] of self-agent
+  let other-virtual [personality] of other-agent
+  let len length self-virtual
+  
+  let cmaxidx collect-max virtual-candidates
+  let cmax (first cmaxidx)
+ 
+;   set dist sum (map [
+;     [a b] -> (a - b) ^ 2
+;   ] self-virtual other-virtual)
+  
+  while [i < len] [
+    let a (item i self-virtual)
+    let b (item i other-virtual)
+    let c (a - b)
+    set dist dist + ( c * c )
+    if dist > cmax [ report virtual-candidates ]
+    set i (i + 1)
+  ]
+  
+  report replace-item (last cmaxidx) virtual-candidates (list other-agent dist)
+end
+
+to-report desin-infect-chance [ text-id agent-personality ]
+  let text-disin (item text-id (item 0 db_b))
+  let text-tech (item text-id (item 1 db_b))
+  
+  let total-tech-sens 0
+  let total-disin-sens 0
+  let i 0
+
+  ;; Note a limitation here that the perceived sensitivity toward a topic is depersonalised, it is impossible to discern in the given data how much is "strong agreement" for every person individually 
+  
+  foreach text-tech [
+    x -> 
+    set total-tech-sens (total-tech-sens + (x * (item i tech) / 5))
+    set i (i + 1)
+  ]
+  set i 0
+  
+  foreach text-disin [  ;; topic of the text
+    x -> 
+    set total-disin-sens (total-disin-sens + (x * (item i disin) / 10))
+    set i (i + 1)
+  ] 
+  
+  report total-tech-sens * total-disin-sens
+end
+
+to disinformation-processing-logic [ text-id other-agent-personality ]
+  ;; item n tech  -> Nth turtle nth item of the db_c_tech  to denote topic sensitivity
+  ;; item n desin -> Nth turtle nth item of the db_c_desin to denote knowledge of desinformation tactic
+  
+  let rng random-float 1
+  
+  if (desin-infect-chance text-id other-agent-personality) > rng [
+    
+    let personality-diff virtual-distance-local personality other-agent-personality
+    let likemindedness (1 - min list 1 (personality-diff / (s_max * decaying-strength)))
+    let deg-of-effect (interaction-strength * likemindedness)
+    
+    set personality (
+      map [[a b] ->
+        (a * (1 - deg-of-effect) ;; XX% of current personality 
+          + ;; = 100%
+          (b * deg-of-effect)) ;; XX% of adapted personality
+      ]
+      personality other-agent-personality )
+    
+    let dbbsoc item text-id (item 2 db_b)
+    set soc-capital (map [ [a b] -> max (list -1 (a + ((b / 5) * deg-of-effect))) ] soc-capital (list (item 5 dbbsoc) (item 6 dbbsoc) (item 7 dbbsoc) (item 8 dbbsoc)))
+    set traits replace-item 10 traits max (list -1 (min (list 1 ((item 10 traits) + ((item 2 dbbsoc) / 5 * deg-of-effect)))))
+    ;; There should be a better way to calculate this?
+    
+;   let spp1 map [row -> item 13 row] db_a ;; Social polarity
+;   let spp2 map [row -> item 6 row] db_a  ;; Destructive criticism
+;   let spp3 map [row -> item 14 row] db_a ;; Social radicalization
+;   let spp4 map [row -> item 9 row] db_a  ;; Information bubbles
+;   let spp5 map [row -> item 5 row] db_a  ;; Democratic
+;   let skn1 map [row -> item 15 row] db_a ;; Trust and cooperation
+;   let skn2 map [row -> item 2 row] db_a  ;; Civic activism
+;   let skn3 map [row -> item 12 row] db_a ;; Social network support
+;   let skn4 map [row -> item 11 row] db_a ;; Personal connections
+    
+    set narrative text-id
+  ]
+end
+
+to agentlogic
+  
+  ;; fix so OTHER agents get affected, not the agent itself
+  
+  let rng random-float 1
+  
+  let rng-int random 1016 ;; number of propaganda texts
+  
+  if broadcast-chance * broadcasters > rng [ 
+    let broadcaster-personality []
+    
+    ask one-of turtles with [member? who broadcaster-agents] [
+      set broadcaster-personality [personality] of self
+    ]
+    
+    ask other turtles [
+      
+      if (virtual-distance-local personality broadcaster-personality) < s_max * broadcaster-range-mult  [ ; 8^d hyperspheres would tile in hypercubic arrangement I think
+        disinformation-processing-logic rng-int broadcaster-personality
+      ]
+      
+      ;; Am I tracking soc capital correctly ?
+      
+      ;; Could run individual theme tests per disinformation type
+      ;; Direct trait modification based on social capital ?
+      
+    ]
+  ]
+  
+  ask turtles [
+    ;; Let agents find their own disinformation
+    let nartemp random 1016
+    set rng random-float min-of-disin
+    
+    ;; Making an assumption that those who spend an hour a day browsing social media are guaranteed to see desinformation
+    ;; Combined with resilience of fact-checking and resilience to a topic, and the spreading odds
+    if (item 0 traits) * (1 - (item 1 traits) / 5) * (desin-infect-chance nartemp personality) * (1 - (item 5 traits) / 5) * (1 - (item 6 traits) / 5) > rng [
+      set narrative nartemp
+    ]
+    
+    if narrative != -1 [
+      ;; Choose a neighbour to talk to
+      if neighbour-interaction = true [
+        
+        let orig-personality personality
+        
+        set rng random-float 1
+        
+        let chosen-one one-of neighbours
+        
+        ask chosen-one [
+          if narrative != -1 and (1 - (item 1 traits) / 5) * interaction-probability > rng [ ;; Ensure there's a narrative to talk about
+            disinformation-processing-logic narrative orig-personality
+            if (item 10 traits) > (random-float 1) [
+              set narrative -1 ;; talked about it
+            ]
+          ]
+        ]
+      ]
+      
+      ;; Choose agents through personality (virtual) interaction
+      if virtual-interaction = true [
+        
+        let orig-personality personality
+        
+        let virtual-candidates []
+        repeat interaction-amount [
+          set virtual-candidates fput (list nobody s_max) virtual-candidates
+        ]
+        
+        ask other turtles [
+          set virtual-candidates (personality-distance myself self virtual-candidates)
+        ]
+        
+        ;; collect turtles from list
+        let i 0
+        foreach virtual-candidates [
+          x ->
+          set virtual-candidates (replace-item i virtual-candidates (item 0 x))
+          set i (i + 1)
+        ]
+        
+        ask one-of virtual-candidates [
+          set rng random-float 60
+          set rng-int random 1016
+          
+          if narrative != -1 and (item 0 traits) * (1 - (item 1 traits) / 5) * interaction-probability > rng [
+            disinformation-processing-logic narrative orig-personality
+            if (item 10 traits) > (random-float 1) [
+              set narrative -1 ;; talked about it
+            ]
+          ]
+        ]
+      ]
+    ]
+    
+    setxy ( calc-position-x item x-axis-feature personality ) ( calc-position-y item y-axis-feature personality )
+  ]
+end
+
+;; Visualisation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to drawtrail
+  let c 80
+  
+  ask turtles [
+    if ((highlight-demographic > 0 or highlight-central > 0) and color = 15) or (highlight-demographic = 0 and highlight-central = 0) [
+      set pcolor 5 + c
+    ]
+  ]
+  
+  if ticks mod (200 / trail-decay-speed) = 0 [
+    ask patches [
+      if pcolor = 9 + c [ set pcolor 9.9 ]
+      if pcolor = 8 + c [ set pcolor pcolor + 1 ]
+      if pcolor = 7 + c [ set pcolor pcolor + 1 ]
+      if pcolor = 6 + c [ set pcolor pcolor + 1 ]
+      if pcolor = 5 + c [ set pcolor pcolor + 1 ]
+    ]
+  ]
+end
+
+to-report calc-position-x [l]
+  report ((world-width - 1) * 0.1) * l + (world-width - 1) / 2
+end
+
+to-report calc-position-y [l]
+  report ((world-height - 1) * 0.1) * l + (world-height - 1) / 2
+end
+
+to updview
+  setxy ( calc-position-x item x-axis-feature personality ) ( calc-position-y item y-axis-feature personality )
+end
+
+to colorupd
+  set color tempcolor
+  
+  if highlight-demographic > 0 [
+    if item demo-trait demo = highlight-demographic [
+      set color 15
+    ]
+    if item demo-trait demo != highlight-demographic [
+      set color 55
+    ]
+  ]
+  
+  if highlight-central > 0 [
+    if tempcolor = 50 - highlight-central * 9 [
+      set color 15
+    ]
+    if tempcolor != 50 - highlight-central * 9 [
+      set color 55
+    ]
+  ]
+end
+
+to-report calc-physical-position-x [px]
+  report ((world-width - 1) / physical-world-scale) * px
+end
+
+to-report calc-physical-position-y [py]
+  report ((world-height - 1) / physical-world-scale) * py
+end
+
+to showphysical
+  ask turtles [
+    setxy (calc-physical-position-x physical-x) (calc-physical-position-y physical-y)
+    colorupd
+  ]
+  
+  ask turtle 0 [
+    updview
+  ]
+end
+
+to go ;; The only difference's they're "forever" and not
+  agentlogic
+  drawtrail
+  
+  tick
+end
+
+to step
+  agentlogic
+  drawtrail
+  
+  tick
+end]]></code>
+  <widgets>
+    <view x="11" wrappingAllowedX="false" y="7" frameRate="30.0" minPycor="0" height="406" showTickCounter="true" patchSize="2.0" fontSize="10" wrappingAllowedY="false" width="406" tickCounterLabel="ticks" maxPycor="200" updateMode="0" maxPxcor="200" minPxcor="0"></view>
+    <slider x="579" step="1" y="215" max="6" width="150" display="highlight-demographic" height="50" min="0" direction="Horizontal" default="0.0" variable="highlight-demographic"></slider>
+    <button x="12" y="417" height="40" disableUntilTicks="false" forever="false" kind="Turtle" width="101" display="Refresh">colorupd
+updview</button>
+    <button x="115" y="417" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="76" display="Physical">showphysical</button>
+    <button x="221" y="417" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="63" display="step">step</button>
+    <button x="286" y="417" height="40" disableUntilTicks="false" forever="true" kind="Observer" width="63" display="go">go</button>
+    <button x="352" y="417" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="63" display="setup">setup</button>
+    <slider x="423" step="1" y="7" max="405" width="150" display="agentcount" height="50" min="1" direction="Horizontal" default="100.0" variable="agentcount" units="agents"></slider>
+    <slider x="423" step="1" y="215" max="8" width="150" display="y-axis-feature" height="50" min="0" direction="Horizontal" default="0.0" variable="y-axis-feature"></slider>
+    <slider x="423" step="1" y="163" max="8" width="150" display="x-axis-feature" height="50" min="0" direction="Horizontal" default="1.0" variable="x-axis-feature"></slider>
+    <slider x="423" step="1" y="111" max="100" width="150" display="physical-world-scale" height="50" min="10" direction="Horizontal" default="100.0" variable="physical-world-scale"></slider>
+    <slider x="423" step="1" y="59" max="25" width="150" display="seedcount" height="50" min="1" direction="Horizontal" default="10.0" variable="seedcount"></slider>
+    <slider x="579" step="1" y="112" max="25" width="150" display="highlight-central" height="50" min="0" direction="Horizontal" default="0.0" variable="highlight-central"></slider>
+    <slider x="886" step="1" y="6" max="10" width="150" display="interaction-amount" height="50" min="1" direction="Horizontal" default="3.0" variable="interaction-amount"></slider>
+    <slider x="886" step="0.01" y="58" max="1" width="150" display="interaction-probability" height="50" min="0" direction="Horizontal" default="1.0" variable="interaction-probability"></slider>
+    <slider x="886" step="0.01" y="110" max="1" width="150" display="interaction-strength" height="50" min="0" direction="Horizontal" default="0.05" variable="interaction-strength"></slider>
+    <slider x="887" step="0.01" y="163" max="1" width="150" display="broadcast-chance" height="50" min="0" direction="Horizontal" default="0.0" variable="broadcast-chance"></slider>
+    <slider x="423" step="1" y="267" max="10" width="150" display="rng-seed" height="50" min="0" direction="Horizontal" default="0.0" variable="rng-seed"></slider>
+    <slider x="887" step="0.1" y="216" max="16" width="150" display="decaying-strength" height="50" min="0.2" direction="Horizontal" default="0.2" variable="decaying-strength"></slider>
+    <slider x="887" step="1" y="268" max="9" width="150" display="dimension-count" height="50" min="2" direction="Horizontal" default="9.0" variable="dimension-count"></slider>
+    <switch x="739" y="116" height="40" on="true" variable="neighbour-interaction" width="138" display="neighbour-interaction"></switch>
+    <switch x="739" y="63" height="40" on="true" variable="enable-rng-seed" width="138" display="enable-rng-seed"></switch>
+    <switch x="739" y="10" height="40" on="true" variable="centralise-locations" width="138" display="centralise-locations"></switch>
+    <switch x="739" y="168" height="40" on="true" variable="virtual-interaction" width="138" display="virtual-interaction"></switch>
+    <slider x="579" step="1" y="267" max="7" width="150" display="demo-trait" height="50" min="0" direction="Horizontal" default="0.0" variable="demo-trait"></slider>
+    <slider x="579" step="1" y="7" max="50" width="150" display="broadcasters" height="50" min="0" direction="Horizontal" default="0.0" variable="broadcasters" units="agents"></slider>
+    <switch x="739" y="219" height="40" on="false" variable="anyone-broadcasts" width="138" display="anyone-broadcasts"></switch>
+    <slider x="887" step="5" y="321" max="240" width="150" display="min-of-disin" height="50" min="5" direction="Horizontal" default="30.0" variable="min-of-disin"></slider>
+    <slider x="733" step="0.005" y="267" max="1" width="150" display="broadcaster-range-mult" height="50" min="0.125" direction="Horizontal" default="1.0" variable="broadcaster-range-mult"></slider>
+    <plot x="616" autoPlotX="true" yMax="1.0" autoPlotY="true" yAxis="social capital" y="326" xMin="0.0" height="165" legend="false" xMax="10.0" yMin="-1.0" width="228" xAxis="iterations" display="Social capital over time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="default" color="-16777216" legend="true">
+        <setup></setup>
+        <update>plot mean (map sum [soc-capital] of turtles) / 4</update>
+      </pen>
+    </plot>
+    <slider x="887" step="0.05" y="374" max="2" width="150" display="trail-decay-speed" height="50" min="0.1" direction="Horizontal" default="0.5" variable="trail-decay-speed"></slider>
+  </widgets>
+  <info>## Model for spread and effect of propaganda and disinformation texts in social networks
+
+The model takes inputs from ATSPARA project databases, which are not publically available.
+
+Code available in: https://github.com/martynassalciunas/NetLogo
+
+## Knobs
+
+**agentcount** - selects up to 405 agents that are modelled after Database C survey data.
+**interaction-amount** - pool from closest which the agent will interact to spread it's agenda.
+**interaction-strength** - factor of said influece.
+**min-of-disin** - likelyhood of agents to get disinformation.
+**decaying-strength** - bound at which disinformation has an effect.
+
+**rng-seed** - deterministic tests.
+**enable-rng-seed** - enables such tests.
+
+**x-axis-feature** and **y-axis-feature** - projects a personality trait of an agent to a 2D space (from -5 to 5).
+**highlight-demographic** - explicitly colours all agents of a certain demographic trait
+**demo-trait** - select which trait to colour from the extracted db_c_demo global variable.
+**trail-decay-speed** - determines how fast the trail decays in the visualisation.
+
+"flats" (daugiabučiai)
+**seedcount** - creates an agent to "seed" as the flat center, cannot be less than 'agentcount'.
+**highlight-central** - explicitly colours all agents in that flat.
+**centralise-locations** - whether to enable random distribution or the "flat" one.
+**physical-world-scale** - mainly for distances between flats.
+
+**neighbour-interaction** - enables physical space interaction.
+**virtual-interaction** - enables virtual space interaction.
+
+**broadcasters** - assigns that many agents to the broadcaster pool.
+**anyone-broadcasts** - allows all agents to have the broadcaster role.
+**broadcast-chance** - how likely every iteration that a broadcaster will spread it's message.
+**broadcaster-range-mult** - how far can the broadcaster reach in the virtual space.
+
+</info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="sheep" rotatable="false" editableColorIndex="15">
+      <circle x="203" y="65" marked="true" color="-1" diameter="88" filled="true"></circle>
+      <circle x="70" y="65" marked="true" color="-1" diameter="162" filled="true"></circle>
+      <circle x="150" y="105" marked="true" color="-1" diameter="120" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="218" y="120"></point>
+        <point x="240" y="165"></point>
+        <point x="255" y="165"></point>
+        <point x="278" y="120"></point>
+      </polygon>
+      <circle x="214" y="72" marked="false" color="-1920102913" diameter="67" filled="true"></circle>
+      <rectangle endX="179" startY="223" marked="true" color="-1" endY="298" startX="164" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="45" y="285"></point>
+        <point x="30" y="285"></point>
+        <point x="30" y="240"></point>
+        <point x="15" y="195"></point>
+        <point x="45" y="210"></point>
+      </polygon>
+      <circle x="3" y="83" marked="true" color="-1" diameter="150" filled="true"></circle>
+      <rectangle endX="80" startY="221" marked="true" color="-1" endY="296" startX="65" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="195" y="285"></point>
+        <point x="210" y="285"></point>
+        <point x="210" y="240"></point>
+        <point x="240" y="210"></point>
+        <point x="195" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="276" y="85"></point>
+        <point x="285" y="105"></point>
+        <point x="302" y="99"></point>
+        <point x="294" y="83"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="219" y="85"></point>
+        <point x="210" y="105"></point>
+        <point x="193" y="99"></point>
+        <point x="201" y="83"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="wolf" rotatable="false" editableColorIndex="0">
+      <polygon color="255" filled="true" marked="false">
+        <point x="253" y="133"></point>
+        <point x="245" y="131"></point>
+        <point x="245" y="133"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="2" y="194"></point>
+        <point x="13" y="197"></point>
+        <point x="30" y="191"></point>
+        <point x="38" y="193"></point>
+        <point x="38" y="205"></point>
+        <point x="20" y="226"></point>
+        <point x="20" y="257"></point>
+        <point x="27" y="265"></point>
+        <point x="38" y="266"></point>
+        <point x="40" y="260"></point>
+        <point x="31" y="253"></point>
+        <point x="31" y="230"></point>
+        <point x="60" y="206"></point>
+        <point x="68" y="198"></point>
+        <point x="75" y="209"></point>
+        <point x="66" y="228"></point>
+        <point x="65" y="243"></point>
+        <point x="82" y="261"></point>
+        <point x="84" y="268"></point>
+        <point x="100" y="267"></point>
+        <point x="103" y="261"></point>
+        <point x="77" y="239"></point>
+        <point x="79" y="231"></point>
+        <point x="100" y="207"></point>
+        <point x="98" y="196"></point>
+        <point x="119" y="201"></point>
+        <point x="143" y="202"></point>
+        <point x="160" y="195"></point>
+        <point x="166" y="210"></point>
+        <point x="172" y="213"></point>
+        <point x="173" y="238"></point>
+        <point x="167" y="251"></point>
+        <point x="160" y="248"></point>
+        <point x="154" y="265"></point>
+        <point x="169" y="264"></point>
+        <point x="178" y="247"></point>
+        <point x="186" y="240"></point>
+        <point x="198" y="260"></point>
+        <point x="200" y="271"></point>
+        <point x="217" y="271"></point>
+        <point x="219" y="262"></point>
+        <point x="207" y="258"></point>
+        <point x="195" y="230"></point>
+        <point x="192" y="198"></point>
+        <point x="210" y="184"></point>
+        <point x="227" y="164"></point>
+        <point x="242" y="144"></point>
+        <point x="259" y="145"></point>
+        <point x="284" y="151"></point>
+        <point x="277" y="141"></point>
+        <point x="293" y="140"></point>
+        <point x="299" y="134"></point>
+        <point x="297" y="127"></point>
+        <point x="273" y="119"></point>
+        <point x="270" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="-1" y="195"></point>
+        <point x="14" y="180"></point>
+        <point x="36" y="166"></point>
+        <point x="40" y="153"></point>
+        <point x="53" y="140"></point>
+        <point x="82" y="131"></point>
+        <point x="134" y="133"></point>
+        <point x="159" y="126"></point>
+        <point x="188" y="115"></point>
+        <point x="227" y="108"></point>
+        <point x="236" y="102"></point>
+        <point x="238" y="98"></point>
+        <point x="268" y="86"></point>
+        <point x="269" y="92"></point>
+        <point x="281" y="87"></point>
+        <point x="269" y="103"></point>
+        <point x="269" y="113"></point>
+      </polygon>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+</model>
